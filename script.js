@@ -19,11 +19,31 @@ class RecipeFinder {
         this.backToSearchButton = document.getElementById('back-to-search');
         this.favoritesLink = document.getElementById('favorites-link');
         
+        // Filter elements
+        this.vegetarianCheckbox = document.getElementById('vegetarian');
+        this.veganCheckbox = document.getElementById('vegan');
+        this.glutenFreeCheckbox = document.getElementById('glutenFree');
+        this.mealTypeRadios = document.querySelectorAll('input[name="mealType"]');
+        this.cuisineSelect = document.getElementById('cuisine');
+        this.categoryButtons = document.querySelectorAll('.category-btn');
+        
         // Event Listeners
         this.searchForm.addEventListener('submit', (e) => this.handleSearch(e));
         this.resultsContainer.addEventListener('click', (e) => this.handleRecipeClick(e));
         this.favoritesLink.addEventListener('click', (e) => this.showFavorites(e));
         this.backToSearchButton.addEventListener('click', () => this.showSearchPage());
+        
+        // Add event listeners for filters
+        this.vegetarianCheckbox.addEventListener('change', () => this.handleFilterChange());
+        this.veganCheckbox.addEventListener('change', () => this.handleFilterChange());
+        this.glutenFreeCheckbox.addEventListener('change', () => this.handleFilterChange());
+        this.mealTypeRadios.forEach(radio => radio.addEventListener('change', () => this.handleFilterChange()));
+        this.cuisineSelect.addEventListener('change', () => this.handleFilterChange());
+        
+        // Add event listeners for category buttons
+        this.categoryButtons.forEach(button => {
+            button.addEventListener('click', (e) => this.handleCategoryClick(e));
+        });
         
         // Add animation to header on load
         this.animateHeader();
@@ -82,6 +102,55 @@ class RecipeFinder {
         }
     }
 
+    handleCategoryClick(e) {
+        const category = e.target.getAttribute('data-category');
+        
+        // Update active state for category buttons
+        this.categoryButtons.forEach(btn => btn.classList.remove('active'));
+        e.target.classList.add('active');
+        
+        // Search by category
+        this.searchByCategory(category);
+    }
+
+    async searchByCategory(category) {
+        this.showLoading();
+        
+        try {
+            // Using TheMealDB API to filter by category
+            const response = await fetch(`https://www.themealdb.com/api/json/v1/1/filter.php?c=${category}`);
+            const data = await response.json();
+            
+            if (data.meals) {
+                // Get full details for each recipe
+                const recipeDetails = await Promise.all(
+                    data.meals.slice(0, 12).map(async (meal) => {
+                        const res = await fetch(`https://www.themealdb.com/api/json/v1/1/lookup.php?i=${meal.idMeal}`);
+                        const detail = await res.json();
+                        return detail.meals[0];
+                    })
+                );
+                
+                this.currentRecipes = recipeDetails;
+                this.displayRecipes(recipeDetails);
+            } else {
+                this.showNoResults();
+            }
+        } catch (error) {
+            console.error('Error fetching recipes by category:', error);
+            this.showNoResults();
+        }
+    }
+
+    handleFilterChange() {
+        const query = this.searchInput.value.trim();
+        if (query) {
+            // In a real implementation, we would apply filters here
+            // For now, we'll just trigger a new search
+            this.searchRecipes(query);
+        }
+    }
+
     displayRecipes(recipes) {
         this.hideLoading();
         this.resultsContainer.innerHTML = '';
@@ -93,11 +162,69 @@ class RecipeFinder {
         
         this.hideNoResults();
         
+        // Show personalized recommendations if we're on the main search page and have favorites
+        if (this.searchPage.classList.contains('d-none') === false && this.favorites.length > 0) {
+            this.showPersonalizedRecommendations();
+        }
+        
         recipes.forEach((recipe, index) => {
             const isFavorite = this.favorites.some(fav => fav.idMeal === recipe.idMeal);
             const recipeCard = this.createRecipeCard(recipe, isFavorite, index);
             this.resultsContainer.appendChild(recipeCard);
         });
+    }
+
+    showPersonalizedRecommendations() {
+        // Get categories from favorite recipes
+        const favoriteCategories = this.favorites.map(recipe => recipe.strCategory);
+        // Get unique categories
+        const uniqueCategories = [...new Set(favoriteCategories)];
+        
+        if (uniqueCategories.length > 0) {
+            // Create a section for recommendations
+            const recommendationsSection = document.createElement('div');
+            recommendationsSection.className = 'col-12 mb-4';
+            recommendationsSection.innerHTML = `
+                <h4 class="text-center mb-4">Recommended for You</h4>
+                <p class="text-center text-muted">Based on your favorite recipes</p>
+            `;
+            
+            // Insert at the beginning of results container
+            this.resultsContainer.appendChild(recommendationsSection);
+            
+            // For each category, fetch a random recipe that's not in favorites
+            uniqueCategories.slice(0, 3).forEach(async (category) => {
+                try {
+                    const response = await fetch(`https://www.themealdb.com/api/json/v1/1/filter.php?c=${category}`);
+                    const data = await response.json();
+                    
+                    if (data.meals) {
+                        // Filter out recipes that are already in favorites
+                        const nonFavoriteMeals = data.meals.filter(meal => 
+                            !this.favorites.some(fav => fav.idMeal === meal.idMeal)
+                        );
+                        
+                        // Pick a random meal
+                        if (nonFavoriteMeals.length > 0) {
+                            const randomMeal = nonFavoriteMeals[Math.floor(Math.random() * nonFavoriteMeals.length)];
+                            
+                            // Get full details
+                            const detailResponse = await fetch(`https://www.themealdb.com/api/json/v1/1/lookup.php?i=${randomMeal.idMeal}`);
+                            const detailData = await detailResponse.json();
+                            
+                            if (detailData.meals) {
+                                const recipe = detailData.meals[0];
+                                const isFavorite = this.favorites.some(fav => fav.idMeal === recipe.idMeal);
+                                const recipeCard = this.createRecipeCard(recipe, isFavorite, 0);
+                                this.resultsContainer.appendChild(recipeCard);
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error fetching recommendations:', error);
+                }
+            });
+        }
     }
 
     createRecipeCard(recipe, isFavorite, index) {
@@ -109,14 +236,13 @@ class RecipeFinder {
         
         col.innerHTML = `
             <div class="card recipe-card">
-                <img src="${recipe.strMealThumb}" class="recipe-image" alt="${recipe.strMeal}">
+                <img src="${recipe.strMealThumb}" class="recipe-image" alt="${recipe.strMeal}" loading="lazy">
                 <div class="recipe-details">
                     <h5 class="recipe-title">${title}</h5>
-                    <p class="recipe-category">
+                    <p>
                         <span class="badge bg-secondary">${recipe.strCategory}</span> 
                         <span class="badge bg-info">${recipe.strArea}</span>
                     </p>
-                    <p class="text-muted small">${this.truncateDescription(recipe.strInstructions, 100)}</p>
                 </div>
                 <div class="recipe-footer">
                     <button class="favorite-btn ${isFavorite ? 'active' : ''}" data-id="${recipe.idMeal}" title="${isFavorite ? 'Remove from favorites' : 'Add to favorites'}">
@@ -271,7 +397,7 @@ class RecipeFinder {
         this.recipeDetailContent.innerHTML = `
             <div class="row">
                 <div class="col-md-6">
-                    <img src="${recipe.strMealThumb}" class="recipe-detail-image" alt="${recipe.strMeal}">
+                    <img src="${recipe.strMealThumb}" class="recipe-detail-image" alt="${recipe.strMeal}" loading="lazy">
                     <h2>${recipe.strMeal}</h2>
                     <p><strong>Category:</strong> ${recipe.strCategory}</p>
                     <p><strong>Area:</strong> ${recipe.strArea}</p>
@@ -302,7 +428,33 @@ class RecipeFinder {
                 </div>
             </div>
             ` : ''}
+            
+            <!-- Social Sharing -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <h3>Share This Recipe</h3>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary share-btn" data-platform="facebook">
+                            <i class="fab fa-facebook-f me-2"></i>Facebook
+                        </button>
+                        <button class="btn btn-info share-btn" data-platform="twitter">
+                            <i class="fab fa-twitter me-2"></i>Twitter
+                        </button>
+                        <button class="btn btn-success share-btn" data-platform="whatsapp">
+                            <i class="fab fa-whatsapp me-2"></i>WhatsApp
+                        </button>
+                    </div>
+                </div>
+            </div>
         `;
+        
+        // Add event listeners for sharing functionality
+        document.querySelectorAll('.share-btn').forEach(button => {
+            button.addEventListener('click', (e) => {
+                const platform = e.target.closest('.share-btn').getAttribute('data-platform');
+                this.shareRecipe(recipe, platform);
+            });
+        });
         
         // Hide search page and show recipe detail page
         this.searchPage.classList.add('d-none');
@@ -310,6 +462,26 @@ class RecipeFinder {
         
         // Scroll to top of page
         window.scrollTo(0, 0);
+    }
+
+    shareRecipe(recipe, platform) {
+        const url = window.location.href;
+        const text = `Check out this delicious recipe for ${recipe.strMeal}!`;
+        
+        switch (platform) {
+            case 'facebook':
+                window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}&quote=${encodeURIComponent(text)}`, '_blank');
+                break;
+            case 'twitter':
+                window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`, '_blank');
+                break;
+            case 'whatsapp':
+                window.open(`https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`, '_blank');
+                break;
+            default:
+                navigator.clipboard.writeText(url);
+                this.showToast('Link copied to clipboard!', 'success');
+        }
     }
 
     showSearchPage() {
